@@ -22,7 +22,8 @@ a human.
 | --- | --- |
 | M0 Scaffold (config, logging, LLM wrapper with caching + usage tracking) | done |
 | M1 Bootstrap infra (`infra/`): state bucket, OIDC, 4 roles, boundaries, CloudTrail, alerts | done (applied 2026-11-25) |
-| M2 Terraform PR + apply pipeline (`.github/`, `ci/`, `pipelines/`, `sandbox/`) | in progress |
+| M2 Terraform PR + apply pipeline (`.github/`, `ci/`, `pipelines/`, `sandbox/`) | done (first CI apply 2026-11-25, PR #2) |
+| M3 `aws-insights` cost tools + Cost agent, shadow mode | next |
 
 ## Setup
 
