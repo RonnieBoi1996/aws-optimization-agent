@@ -1,0 +1,61 @@
+# Central configuration for the optimizer.
+# Everything a human might want to tune lives here (models, thresholds, budgets),
+# so nobody has to hunt through Python files to change behaviour.
+
+aws:
+  # The account ID is NOT stored here (this repo is public). It is read from
+  # the OPTIMIZER_AWS_ACCOUNT_ID environment variable at startup.
+  region: eu-west-1
+  # Cost Explorer only has an endpoint in us-east-1, whatever the home region is.
+  cost_explorer_region: us-east-1
+
+models:
+  # "Roles" map to concrete model IDs. Code asks for a role ("fast" / "smart"),
+  # never for a hard-coded model string, so swapping models is a one-line change.
+  fast:
+    id: claude-haiku-5-5       # data gathering and summarizing
+    max_tokens: 8000
+    effort: medium
+    refusal_fallback: false    # Haiku has no server-side fallback
+  smart:
+    id: claude-sonnet-5-5      # reasoning, writing Terraform, writing human briefs
+    max_tokens: 16000
+    effort: high
+    # On a policy refusal the API re-runs the request on a server-chosen fallback
+    # model inside the same call (beta "server-side-fallback-2026-07-01").
+    refusal_fallback: true
+
+# USD per million tokens, used only for the usage summary's cost ESTIMATE.
+# Verify against https://www.anthropic.com/pricing before trusting the numbers.
+pricing_usd_per_mtok:
+  claude-haiku-5-5:
+    input: 0.10
+    output: 0.50
+    cache_write_5m: 0.125      # 1.25x input
+    cache_read: 0.01           # 0.1x input
+  claude-sonnet-5-5:
+    input: 2.00
+    output: 10.00
+    cache_write_5m: 2.50       # 1.25x input
+    cache_read: 0.10
+
+guardrails:
+  max_agent_turns: 10          # max model calls in one agent's tool loop
+  run_token_budget: 2000000    # all tokens (input + cache + output) across one run
+  dry_run_default: true        # never open a PR unless --no-dry-run is passed
+
+# Default arbitration thresholds (section 6). Each service may override these
+# in context/<service>/constraints.yaml under "thresholds".
+thresholds:
+  max_p99_increase_ms: 10
+  max_sla_headroom_fraction: 0.25
+  max_latency_fix_monthly_cost_usd: 20
+
+# Billed features are off unless explicitly enabled.
+features:
+  access_analyzer_unused_access: false   # billed per role analyzed per month
+
+paths:
+  runs_dir: runs        # runs/<run_id>.jsonl
+  out_dir: out          # dry-run outputs
+  context_dir: context  # context/<service>/constraints.yaml + docs/

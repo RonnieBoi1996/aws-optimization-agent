@@ -1,0 +1,23 @@
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Run outputs (may contain account details; keep local)
+runs/
+out/
+*.sqlite
+*.db
+
+# Secrets - never commit
+.env
+*.pem
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+tfplan
+tfplan.json
+crash.log

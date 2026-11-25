@@ -1,0 +1,128 @@
+# AWS Optimization Agent
+
+A multi-agent system that analyzes one AWS account (region `eu-west-1`) and
+proposes **cost**, **least-privilege IAM** and **latency** improvements, delivered
+only as Terraform pull requests. A GitHub Actions pipeline checks each PR, and a
+human approves it before anything is applied.
+
+The full spec is in [CLAUDE_CODE_PROMPT.md](CLAUDE_CODE_PROMPT.md). This README
+grows with each milestone.
+
+## Safety model, in one paragraph
+
+The agents only ever **read** AWS, under a read-only IAM role. The only thing they
+write is a PR on an `optimizer/*` branch. Only the CI pipeline applies Terraform,
+using its own role, after a human merges. Conflicts between agents are settled by
+a plain-Python rule engine, never by a model, and anything unclear is escalated to
+a human.
+
+## Status
+
+| Milestone | State |
+| --- | --- |
+| M0 Scaffold (config, logging, LLM wrapper with caching + usage tracking) | done |
+| M1 Bootstrap infra (`infra/`) | next |
+
+## Setup
+
+Prerequisites (already installed on the dev machine): Python 3.12, [uv](https://docs.astral.sh/uv/),
+Terraform, AWS CLI v2, tflint, checkov, gh.
+
+```bash
+uv sync                                  # create .venv and install dependencies
+uv run pytest                            # offline tests, no key or account needed
+uv run optimizer smoke                   # 2 Haiku calls; costs well under $0.01
+```
+
+### Environment variables
+
+This repo is public, so nothing account-specific is committed. Set these in your
+shell instead:
+
+| Variable | What | Secret? |
+| --- | --- | --- |
+| `ANTHROPIC_API_KEY` | Anthropic API key (Console, project workspace with a spend limit) | Yes |
+| `OPTIMIZER_AWS_ACCOUNT_ID` | 12-digit AWS account ID the optimizer is allowed to analyze | No, but kept out of the repo |
+
+The recommended place is a file outside the repo, readable only by you, loaded
+from `~/.zshrc`:
+
+```bash
+# ~/.config/aws-optimizer/anthropic.env   (chmod 600)
+export ANTHROPIC_API_KEY=sk-ant-...
+export OPTIMIZER_AWS_ACCOUNT_ID=123456789012
+
+# ~/.zshrc
+[ -f ~/.config/aws-optimizer/anthropic.env ] && source ~/.config/aws-optimizer/anthropic.env
+```
+
+`.env` is git-ignored as a safety net, but don't rely on it. `config.yaml` refuses
+to load if someone adds an `account_id` to it.
+
+### What `smoke` should print
+
+```text
+call 1: answer='250'  cache_wr=12342  cache_rd=0      uncached_in=68
+call 2: answer='250'  cache_wr=0      cache_rd=12342  uncached_in=68
+```
+
+Call 1 writes the prompt cache and call 2 reads it. If call 2 shows `cache_rd=0`,
+the cached prefix changed between the two calls (see "Prompt caching" below).
+
+## Layout
+
+```text
+config.yaml               models, thresholds, guardrails, pricing (edit this, not code)
+src/optimizer/
+  config.py               loads + validates config.yaml (typos fail loudly)
+  llm.py                  Anthropic SDK wrapper: prompt layout, cache breakpoints,
+                          usage tracking, per-run token budget
+  scrub.py                secret redaction + <untrusted_data> quoting
+  logging_setup.py        console logging + runs/<run_id>.jsonl event log
+  smoke.py, cli.py        `uv run optimizer smoke`
+tests/                    pytest, fully offline (fake Anthropic client)
+runs/, out/               run logs and dry-run outputs (git-ignored)
+```
+
+## Key design decisions (M0)
+
+**Model roles, not model names.** Code asks for `fast` (Haiku 5.5: data gathering and
+summarizing) or `smart` (Sonnet 5.5: reasoning, Terraform, briefs). The mapping lives in
+`config.yaml`.
+
+**Prompt caching.** Caching only works when the start of the prompt is byte-for-byte
+identical between calls, so `llm.py` always builds requests in this order:
+
+1. tools + system prompt → **cache breakpoint 1** (identical for every run of an agent)
+2. the service's `constraints.yaml` + docs → **cache breakpoint 2** (identical per service)
+3. the task, which carries the run ID, dates and anything else that changes → never cached
+4. in agent loops, a **breakpoint 3** on the newest turn, so earlier turns are read from cache
+
+Never put timestamps, run IDs or dates in a system prompt or tool description:
+that silently turns caching off. `tests/test_llm.py` checks that the prefix stays
+byte-identical. The API allows at most 4 breakpoints, and the minimum cacheable
+prefix is 512 tokens on Haiku 5.5 and Sonnet 5.5.
+
+**Usage and budget.** Every call records input, cache-write, cache-read and output
+tokens per agent. `UsageTracker.summary_table()` prints these plus the hit ratio and
+an estimated cost; prices are in `config.yaml`. Before each call the wrapper checks
+`guardrails.run_token_budget`. Once it's exhausted, the run stops with a clear
+`BudgetExceeded` message, never halfway through a call.
+
+**Refusal fallback.** Sonnet calls set `fallbacks="default"` (beta
+`server-side-fallback-2026-07-01`). If the model declines a request for policy reasons,
+the API retries it on a fallback model inside the same call. Turn this off per model with
+`refusal_fallback: false`.
+
+**Untrusted data.** All AWS data, tags, repo files and docs go through `scrub()` (which
+redacts AWS keys, tokens, passwords, PEM keys and URL credentials) and are wrapped in
+`<untrusted_data>` tags before they reach a prompt. Every `runs/*.jsonl` event is
+scrubbed too.
+
+## Planned integrations
+
+- **Terraform MCP server** (HashiCorp, official): gives the model live Terraform
+  Registry docs for providers and modules, so it checks real resource arguments
+  instead of guessing (rule 9). It will be wired into the agents that write
+  Terraform (the IaC synthesizer, M5) and read-only, like every other agent tool.
+- **GitHub MCP server** (official): used only by the IaC synthesizer node, to open PRs.
