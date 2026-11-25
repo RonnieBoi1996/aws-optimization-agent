@@ -1,0 +1,355 @@
+# Terraform checks on every pull request (section 7).
+#
+# Per changed stack: fmt -> validate -> tflint -> checkov -> plan -> scope guard,
+# each its own job (so each shows as its own check), then one PR comment with
+# every result. The `required` job is the single check to mark as required in
+# the ruleset: it always runs and fails if any step failed.
+#
+# Security notes:
+# - No `paths:` filter: a required check must report on every PR, or PRs that
+#   don't touch Terraform could never be merged. Detection happens in `detect`.
+# - The ci/ scripts and .tflint.hcl are taken from the BASE branch (.trusted/),
+#   so a PR can't weaken the checks that judge it.
+# - AWS jobs run only for branches in this repo, never for forks.
+# - Every action is pinned to a full commit SHA.
+
+name: terraform-pr
+
+on:
+  pull_request:
+
+permissions: {} # nothing by default; each job asks for what it needs
+
+concurrency:
+  group: terraform-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true # a new push supersedes the old run
+
+env:
+  TF_VERSION: "1.16.6"
+  TFLINT_VERSION: "v0.66.0"
+  CHECKOV_VERSION: "3.4.11"
+  AWS_REGION: eu-west-1
+  # --- repo-specific settings (infra-live's copy differs only here) ---
+  STACK_ARGS: "--stack-dirs infra sandbox"
+  STATE_KEY_PREFIX: ""
+
+jobs:
+  detect:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      stacks: ${{ steps.detect.outputs.stacks }}
+      any: ${{ steps.detect.outputs.any }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout trusted CI scripts (base branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .trusted
+          persist-credentials: false
+      - id: detect
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          read -ra stack_args <<< "$STACK_ARGS"   # split "--stack-dirs a b" into separate args
+          python3 .trusted/ci/detect_stacks.py --mode pr --base "$BASE_SHA" --head "$HEAD_SHA" \
+            "${stack_args[@]}" --github-output "$GITHUB_OUTPUT"
+
+  fmt:
+    name: fmt (${{ matrix.stack.dir }})
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.detect.outputs.stacks) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - name: terraform fmt -check
+        env:
+          STACK_DIR: ${{ matrix.stack.dir }}
+        run: terraform -chdir="$STACK_DIR" fmt -check -recursive -diff
+
+  validate:
+    name: validate (${{ matrix.stack.dir }})
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.detect.outputs.stacks) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - name: terraform validate
+        env:
+          STACK_DIR: ${{ matrix.stack.dir }}
+        run: |
+          terraform -chdir="$STACK_DIR" init -backend=false -input=false
+          terraform -chdir="$STACK_DIR" validate -no-color
+
+  tflint:
+    name: tflint (${{ matrix.stack.dir }})
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.detect.outputs.stacks) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Checkout trusted lint config (base branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .trusted
+          persist-credentials: false
+      - uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
+        with:
+          tflint_version: ${{ env.TFLINT_VERSION }}
+      - name: tflint
+        env:
+          STACK_DIR: ${{ matrix.stack.dir }}
+          GITHUB_TOKEN: ${{ github.token }} # avoids rate limits when downloading the AWS ruleset
+        run: |
+          CONFIG="$GITHUB_WORKSPACE/.trusted/.tflint.hcl"
+          tflint --init --config "$CONFIG"
+          tflint --chdir "$STACK_DIR" --config "$CONFIG" --format compact
+
+  checkov:
+    name: checkov (${{ matrix.stack.dir }})
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.detect.outputs.stacks) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install checkov
+        run: pipx install "checkov==${CHECKOV_VERSION}"
+      - name: Every inline skip must give a reason
+        env:
+          STACK_DIR: ${{ matrix.stack.dir }}
+        run: |
+          if grep -rnE 'checkov:skip=[A-Za-z0-9_]+[[:space:]]*$' --include='*.tf' "$STACK_DIR"; then
+            echo "::error::Write skips as checkov:skip=CKV_ID:why-it-is-safe"
+            exit 1
+          fi
+      - name: checkov (fails on ANY failed check)
+        # Run from an empty directory so a .checkov.yaml added in the PR can't
+        # change settings. Skips are only possible inline, with a reason.
+        working-directory: ${{ runner.temp }}
+        env:
+          STACK_DIR: ${{ matrix.stack.dir }}
+        run: checkov -d "$GITHUB_WORKSPACE/$STACK_DIR" --framework terraform --quiet --compact
+
+  plan:
+    name: plan (${{ matrix.stack.dir }})
+    needs: [detect, validate]
+    # Never for forks: no AWS credentials for code we don't control.
+    if: needs.detect.outputs.any == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write # OIDC token -> tf-plan role
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.detect.outputs.stacks) }}
+    concurrency:
+      group: tf-plan-${{ matrix.stack.slug }}-pr${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Checkout trusted CI scripts (base branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .trusted
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.TF_PLAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ secrets.AWS_ACCOUNT_ID }}
+          mask-aws-account-id: true
+          role-session-name: gh-plan-${{ github.run_id }}
+      - name: terraform init
+        env:
+          STACK_DIR: ${{ matrix.stack.dir }}
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+        run: |
+          terraform -chdir="$STACK_DIR" init -input=false \
+            -backend-config="bucket=$TF_STATE_BUCKET" \
+            -backend-config="key=${STATE_KEY_PREFIX}${STACK_DIR}/terraform.tfstate" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="use_lockfile=true" \
+            -backend-config="encrypt=true"
+      - name: terraform plan
+        env:
+          STACK_DIR: ${{ matrix.stack.dir }}
+          TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }} # only infra/ declares it; ignored elsewhere
+        run: |
+          set -o pipefail
+          terraform -chdir="$STACK_DIR" plan -input=false -lock-timeout=5m -no-color -out=tfplan 2>&1 \
+            | tee "$RUNNER_TEMP/plan.txt"
+          # Addresses + actions only. The full JSON (with values) never leaves this runner.
+          terraform -chdir="$STACK_DIR" show -json tfplan | python3 .trusted/ci/plan_summary.py \
+            > "$RUNNER_TEMP/plan-summary.json"
+      - name: Mask account details for the public PR comment
+        if: always()
+        env:
+          MASK_VALUES: |
+            ${{ secrets.AWS_ACCOUNT_ID }}
+            ${{ secrets.ALERT_EMAIL }}
+        run: python3 .trusted/ci/mask_text.py "$RUNNER_TEMP/plan.txt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: plan-${{ matrix.stack.slug }}
+          path: |
+            ${{ runner.temp }}/plan.txt
+            ${{ runner.temp }}/plan-summary.json
+          retention-days: 1
+          if-no-files-found: ignore
+
+  scope-guard:
+    name: scope-guard (${{ matrix.stack.dir }})
+    needs: [detect, plan]
+    if: needs.detect.outputs.any == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.detect.outputs.stacks) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the guard diffs base...head to find proposal manifests
+          persist-credentials: false
+      - name: Checkout trusted CI scripts (base branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .trusted
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: plan-${{ matrix.stack.slug }}
+          path: ${{ runner.temp }}/plan
+      - name: Plan scope guard
+        env:
+          STACK_DIR: ${{ matrix.stack.dir }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          python3 .trusted/ci/scope_guard.py --mode pr \
+            --summary "$RUNNER_TEMP/plan/plan-summary.json" --stack "$STACK_DIR" \
+            --base "$BASE_SHA" --head "$HEAD_SHA" --head-ref "$HEAD_REF" \
+            --out "$RUNNER_TEMP/guard.md"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: guard-${{ matrix.stack.slug }}
+          path: ${{ runner.temp }}/guard.md
+          retention-days: 1
+          if-no-files-found: ignore
+
+  comment:
+    needs: [detect, fmt, validate, tflint, checkov, plan, scope-guard]
+    if: always() && needs.detect.outputs.any == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read # read this run's job results
+      contents: read
+      pull-requests: write # create/update the plan comment
+    steps:
+      - name: Checkout trusted CI scripts (base branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .trusted
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: ${{ runner.temp }}/artifacts # one sub-folder per artifact
+      - name: Post or update the PR comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STACKS: ${{ needs.detect.outputs.stacks }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 .trusted/ci/pr_comment.py plan --repo "$GITHUB_REPOSITORY" --pr "$PR_NUMBER" \
+            --run-id "$GITHUB_RUN_ID" --run-url "$RUN_URL" --sha "$HEAD_SHA" \
+            --stacks "$STACKS" --artifacts-dir "$RUNNER_TEMP/artifacts"
+
+  # The ONE check to require in the ruleset. Always runs; fails if anything failed.
+  required:
+    needs: [detect, fmt, validate, tflint, checkov, plan, scope-guard]
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: All Terraform checks passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          ANY: ${{ needs.detect.outputs.any }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS"])
+          bad = {job: n["result"] for job, n in needs.items() if n["result"] in ("failure", "cancelled")}
+          for job, result in needs.items():
+              print(f"{job:12} {result['result']}")
+          if bad:
+              sys.exit(f"::error::Failed or cancelled: {', '.join(bad)}")
+          if os.environ["ANY"] == "true" and os.environ["IS_FORK"] == "true":
+              sys.exit("::error::Terraform changes from a fork can't be planned (no AWS credentials "
+                       "for forks). A maintainer must push the branch to this repo.")
+          EOF

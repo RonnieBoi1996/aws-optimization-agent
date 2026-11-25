@@ -1,0 +1,140 @@
+# Terraform apply on push to main (section 7).
+#
+# - Runs in the `production` environment: you approve each run in GitHub,
+#   and only then does the job get the tf-apply role (OIDC sub is
+#   repo:<owner>/<repo>:environment:production).
+# - Re-plans, runs the scope guard again on that fresh plan, then applies
+#   EXACTLY that saved plan (`apply tfplan`, never a fresh auto-approved plan).
+# - One concurrency group per stack, never cancelled mid-apply.
+# - Posts the result back to the merged PR.
+#
+# This repo applies sandbox/ only. infra/ is applied by hand (see infra/README.md):
+# tf-apply is denied writes to the optimizer's own IAM, so it can't apply infra/.
+
+name: terraform-apply
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+env:
+  TF_VERSION: "1.16.6"
+  AWS_REGION: eu-west-1
+  # --- repo-specific settings (infra-live's copy differs only here) ---
+  APPLY_STACK_ARGS: "--stack-dirs sandbox"
+  STATE_KEY_PREFIX: ""
+
+jobs:
+  detect:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      stacks: ${{ steps.detect.outputs.stacks }}
+      any: ${{ steps.detect.outputs.any }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: detect
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          read -ra stack_args <<< "$APPLY_STACK_ARGS"   # split into separate args
+          python3 ci/detect_stacks.py --mode push --base "$BEFORE_SHA" --head "$GITHUB_SHA" \
+            "${stack_args[@]}" --no-pipeline-triggers --github-output "$GITHUB_OUTPUT"
+
+  apply:
+    name: apply (${{ matrix.stack.dir }})
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-24.04
+    environment: production # waits for your approval
+    permissions:
+      contents: read
+      id-token: write # OIDC token -> tf-apply role
+      pull-requests: write # comment the result on the merged PR
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.detect.outputs.stacks) }}
+    concurrency:
+      group: tf-apply-${{ matrix.stack.slug }}
+      cancel-in-progress: false # never kill an apply halfway
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the scope guard diffs before..after for manifests
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.TF_APPLY_ROLE_ARN }} # environment secret (production)
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ secrets.AWS_ACCOUNT_ID }}
+          mask-aws-account-id: true
+          role-session-name: gh-apply-${{ github.run_id }}
+      - name: terraform init
+        env:
+          STACK_DIR: ${{ matrix.stack.dir }}
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+        run: |
+          terraform -chdir="$STACK_DIR" init -input=false \
+            -backend-config="bucket=$TF_STATE_BUCKET" \
+            -backend-config="key=${STATE_KEY_PREFIX}${STACK_DIR}/terraform.tfstate" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="use_lockfile=true" \
+            -backend-config="encrypt=true"
+      - name: terraform plan (saved)
+        env:
+          STACK_DIR: ${{ matrix.stack.dir }}
+        run: |
+          set -o pipefail
+          terraform -chdir="$STACK_DIR" plan -input=false -lock-timeout=5m -no-color -out=tfplan 2>&1 \
+            | tee "$RUNNER_TEMP/plan.txt"
+          terraform -chdir="$STACK_DIR" show -json tfplan | python3 ci/plan_summary.py \
+            > "$RUNNER_TEMP/plan-summary.json"
+      - name: Scope guard on the fresh plan
+        # If something drifted since the PR was planned, an agent change could
+        # now touch more than it declared. Check again before applying.
+        env:
+          STACK_DIR: ${{ matrix.stack.dir }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          python3 ci/scope_guard.py --mode push --summary "$RUNNER_TEMP/plan-summary.json" \
+            --stack "$STACK_DIR" --base "$BEFORE_SHA" --head "$GITHUB_SHA" --out "$RUNNER_TEMP/guard.md"
+      - name: terraform apply (the saved plan, exactly)
+        id: apply
+        env:
+          STACK_DIR: ${{ matrix.stack.dir }}
+        run: |
+          set -o pipefail
+          terraform -chdir="$STACK_DIR" apply -input=false -lock-timeout=5m -no-color tfplan 2>&1 \
+            | tee "$RUNNER_TEMP/apply.txt"
+      - name: Build the report
+        if: always()
+        env:
+          MASK_VALUES: |
+            ${{ secrets.AWS_ACCOUNT_ID }}
+        run: |
+          cd "$RUNNER_TEMP"
+          for f in guard.md plan.txt apply.txt; do
+            [ -f "$f" ] && { echo "===== $f ====="; cat "$f"; echo; }
+          done > report.txt
+          python3 "$GITHUB_WORKSPACE/ci/mask_text.py" report.txt
+      - name: Comment the result on the merged PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STACK_DIR: ${{ matrix.stack.dir }}
+          RESULT: ${{ steps.apply.outcome == 'success' && 'success' || (steps.apply.outcome == 'skipped' && 'failure' || steps.apply.outcome) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 ci/pr_comment.py apply --repo "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA" \
+            --stack "$STACK_DIR" --result "$RESULT" --log "$RUNNER_TEMP/report.txt" --run-url "$RUN_URL"

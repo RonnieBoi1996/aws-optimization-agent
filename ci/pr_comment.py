@@ -50,6 +50,11 @@ def step_results(jobs: list[dict], stack_dir: str) -> dict[str, str]:
     for step in STEPS:
         job = by_name.get(f"{step} ({stack_dir})")
         if job is None:
+            # A matrix job skipped as a whole is reported once, with its name
+            # unexpanded: "scope-guard (${{ matrix.stack.dir }})".
+            job = next((j for n, j in by_name.items()
+                        if n.startswith(f"{step} (") and "${{" in n), None)
+        if job is None:
             out[step] = "missing"
         elif job.get("status") != "completed":
             out[step] = "pending"

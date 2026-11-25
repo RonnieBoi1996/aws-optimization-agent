@@ -22,6 +22,24 @@ variable "github_owner" {
   default     = "RonnieBoi1996"
 }
 
+variable "github_owner_id" {
+  description = "Numeric ID of the GitHub owner (public: gh api users/<owner> -q .id)."
+  type        = string
+  default     = "173453917"
+}
+
+variable "agent_repo_id" {
+  description = "Numeric ID of the agent repo (public: gh api repos/<owner>/<repo> -q .id)."
+  type        = string
+  default     = "1471601401"
+}
+
+variable "infra_repo_id" {
+  description = "Numeric ID of the infra-live repo."
+  type        = string
+  default     = "1471601531"
+}
+
 variable "agent_repo" {
   description = "This repo (agent code + infra/ + sandbox/)."
   type        = string
