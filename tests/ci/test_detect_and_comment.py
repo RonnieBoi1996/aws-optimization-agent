@@ -68,3 +68,8 @@ def test_mask_replaces_account_id_and_email():
     text = "arn:aws:iam::123456789012:role/x  endpoint = me+alerts@example.com"
     out = mask(text, ["123456789012", "me+alerts@example.com", ""])
     assert "123456789012" not in out and "example.com" not in out and out.count("***") == 2
+
+
+def test_skipped_matrix_job_with_unexpanded_name_counts_as_skipped():
+    jobs = [_job("scope-guard (${{ matrix.stack.dir }})", "skipped")]
+    assert step_results(jobs, "sandbox")["scope-guard"] == "skipped"
