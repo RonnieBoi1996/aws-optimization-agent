@@ -21,7 +21,8 @@ a human.
 | Milestone | State |
 | --- | --- |
 | M0 Scaffold (config, logging, LLM wrapper with caching + usage tracking) | done |
-| M1 Bootstrap infra (`infra/`) | next |
+| M1 Bootstrap infra (`infra/`): state bucket, OIDC, 4 roles, boundaries, CloudTrail, alerts | written, waiting for you to apply ([infra/README.md](infra/README.md)) |
+| M2 Terraform PR + apply pipeline | next |
 
 ## Setup
 
@@ -82,6 +83,8 @@ src/optimizer/
   smoke.py, cli.py        `uv run optimizer smoke`
 tests/                    pytest, fully offline (fake Anthropic client)
 runs/, out/               run logs and dry-run outputs (git-ignored)
+infra/                    bootstrap Terraform stack, applied by hand with admin (see infra/README.md)
+.tflint.hcl               tflint config shared by all stacks (AWS ruleset)
 ```
 
 ## Key design decisions (M0)

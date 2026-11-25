@@ -21,3 +21,9 @@ out/
 tfplan
 tfplan.json
 crash.log
+
+# Terraform files that contain account-specific values (repo is public)
+backend.hcl
+*_override.tf
+*.tfvars
+!*.tfvars.example
