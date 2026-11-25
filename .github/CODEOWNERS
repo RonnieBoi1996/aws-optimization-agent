@@ -1,0 +1,12 @@
+# Every change needs a code owner's review (enforced by the
+# "main: code-owner approval" ruleset). The safety-critical paths are listed
+# explicitly so the intent survives if the catch-all line ever changes.
+*            @RonnieBoi1996
+
+# The agent's own identity, the roles, and the detection alerts.
+/infra/      @RonnieBoi1996
+# The pipeline that decides what may be merged and applied.
+/.github/    @RonnieBoi1996
+/ci/         @RonnieBoi1996
+/pipelines/  @RonnieBoi1996
+/scripts/    @RonnieBoi1996
