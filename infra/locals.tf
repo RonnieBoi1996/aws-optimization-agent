@@ -29,8 +29,11 @@ locals {
   workload_boundary_arn = "${local.iam_arn_prefix}:policy${local.protected_path}workload-boundary"
 
   github_oidc_host = "token.actions.githubusercontent.com"
-  agent_repo_full  = "${var.github_owner}/${var.agent_repo}"
-  infra_repo_full  = "${var.github_owner}/${var.infra_repo}"
+  # GitHub's immutable OIDC subject: "repo:<owner>@<owner_id>/<repo>@<repo_id>".
+  # The numeric IDs never change, so a deleted-and-recreated repo with the same
+  # name can't reuse these trust policies.
+  agent_repo_sub = "repo:${var.github_owner}@${var.github_owner_id}/${var.agent_repo}@${var.agent_repo_id}"
+  infra_repo_sub = "repo:${var.github_owner}@${var.github_owner_id}/${var.infra_repo}@${var.infra_repo_id}"
 
   # Data-plane reads: they return the *contents* of customer data, not its
   # configuration. Denied for the read-only roles even if a later policy allows them.

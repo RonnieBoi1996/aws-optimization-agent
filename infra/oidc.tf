@@ -20,18 +20,18 @@ locals {
   : data.aws_iam_openid_connect_provider.github[0].arn)
 }
 
-# Builds a trust policy for GitHub Actions. `subjects` are exact "sub" claims,
-# e.g. "repo:owner/name:pull_request". Never wildcards.
+# Builds a trust policy for GitHub Actions. Values are exact "sub" claims, e.g.
+# "repo:owner@123/name@456:pull_request". Never wildcards.
 data "aws_iam_policy_document" "github_trust" {
   for_each = {
-    agent_read = ["repo:${local.agent_repo_full}:environment:optimizer-shadow"]
+    agent_read = ["${local.agent_repo_sub}:environment:optimizer-shadow"]
     tf_plan = [
-      "repo:${local.agent_repo_full}:pull_request",
-      "repo:${local.infra_repo_full}:pull_request",
+      "${local.agent_repo_sub}:pull_request",
+      "${local.infra_repo_sub}:pull_request",
     ]
     tf_apply = [
-      "repo:${local.agent_repo_full}:environment:production",
-      "repo:${local.infra_repo_full}:environment:production",
+      "${local.agent_repo_sub}:environment:production",
+      "${local.infra_repo_sub}:environment:production",
     ]
   }
 
