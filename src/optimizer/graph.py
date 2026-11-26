@@ -1,6 +1,10 @@
-"""The LangGraph workflow. M3 (shadow mode):
+"""The LangGraph workflow (shadow mode):
 
-    load_context -> cost_agent -> validate -> write_output
+    load_context -> cost_agent -> validate -> synthesize -> write_output
+
+`synthesize` (M5) writes each managed proposal's Terraform change, manifest and
+PR description to out/<run_id>/changes/. It never opens a PR: that's
+`optimizer pr`, for one proposal a human picked.
 
 Later milestones add the IAM and Latency agents in parallel, conflict
 detection, the rule engine, the human gate and the IaC synthesizer.
@@ -43,6 +47,7 @@ class RunState(TypedDict, total=False):
     unmanaged: list[dict]
     rejected: list[dict]
     output_dir: str
+    changes: list[dict]                # synthesizer outcome per proposal
 
 
 @dataclass
@@ -53,6 +58,7 @@ class Runtime:
     tagging: Any            # boto3 resourcegroupstaggingapi client
     exists: ExistsFn
     mcp_server: Any = None  # tests: in-process MCP server instead of the subprocess
+    synthesizer: Any = None  # iac.synthesizer.Synthesizer, or None to skip synthesis
 
 
 def _ctx_from_state(state: RunState) -> LoadedContext:
@@ -99,22 +105,52 @@ def build_graph(rt: Runtime):
                 "unmanaged": [u.model_dump(mode="json") for u in unmanaged],
                 "rejected": [r.model_dump(mode="json") for r in rejected]}
 
+    @traced_node("synthesize")
+    async def node_synthesize(state: RunState) -> RunState:
+        if rt.synthesizer is None:
+            return {"changes": []}
+        from optimizer.iac.synthesizer import write_change  # lazy: only runs that synthesize need it
+        out_dir = cfg.resolve(cfg.paths.out_dir)
+        limit = cfg.synthesizer.max_proposals_per_run
+        changes = []
+        for i, p in enumerate(state["proposals"]):
+            if i >= limit:
+                changes.append({"proposal_id": p["id"], "status": "skipped",
+                                "reason": f"over synthesizer.max_proposals_per_run ({limit})"})
+                continue
+            try:
+                r = await rt.synthesizer.synthesize(p, state["tag_map"].get(p["resource_arn"], {}))
+            except Exception as e:  # one broken proposal must not lose the others
+                log.exception("synthesizer failed on %s", p["id"])
+                changes.append({"proposal_id": p["id"], "status": "failed", "reason": f"{type(e).__name__}: {e}"})
+                continue
+            folder = write_change(out_dir, state["run_id"], p, r, cfg.aws.account_id)
+            rt.run_log.event("synthesized", proposal_id=p["id"], status=r.status, reason=r.reason,
+                             stack=r.stack, plan_changes=r.plan_changes)
+            changes.append({"proposal_id": p["id"], "status": r.status, "reason": r.reason,
+                            "stack": r.stack, "repo": r.repo, "plan_changes": r.plan_changes,
+                            "folder": str(folder)})
+        return {"changes": changes}
+
     @traced_node("write_output")
     def node_write_output(state: RunState) -> RunState:
         folder = write_outputs(cfg.resolve(cfg.paths.out_dir), state["run_id"], state["proposals"],
                                state["unmanaged"], state["rejected"], state.get("agent_stop", "?"),
-                               rt.llm.usage.summary_table(), skipped=state.get("skipped", []))
+                               rt.llm.usage.summary_table(), skipped=state.get("skipped", []),
+                               changes=state.get("changes", []))
         return {"output_dir": str(folder)}
 
     g = StateGraph(RunState)
     g.add_node("load_context", node_load_context)
     g.add_node("cost_agent", node_cost_agent)
     g.add_node("validate", node_validate)
+    g.add_node("synthesize", node_synthesize)
     g.add_node("write_output", node_write_output)
     g.add_edge(START, "load_context")
     g.add_edge("load_context", "cost_agent")
     g.add_edge("cost_agent", "validate")
-    g.add_edge("validate", "write_output")
+    g.add_edge("validate", "synthesize")
+    g.add_edge("synthesize", "write_output")
     g.add_edge("write_output", END)
     return g.compile()
 

@@ -24,11 +24,12 @@ a human.
 | M1 Bootstrap infra (`infra/`): state bucket, OIDC, 4 roles, boundaries, CloudTrail, alerts | done (applied 2026-11-25) |
 | M2 Terraform PR + apply pipeline (`.github/`, `ci/`, `pipelines/`, `sandbox/`) | done (first CI apply 2026-11-25, PR #2) |
 | M3 `aws-insights` cost tools + Cost agent, shadow mode | done (2026-11-25, PR #4) |
-| M4 Sandbox fixtures (`sandbox/fixtures.tf`) + eval (`evals/`, `optimizer eval`) | in review |
+| M4 Sandbox fixtures (`sandbox/fixtures.tf`) + eval (`evals/`, `optimizer eval`) | done (2026-11-26, PRs #5, #6); full eval due ~2026-11-28 |
+| M5 IaC synthesizer + `optimizer pr` (GitHub App, GitHub + Terraform MCP servers) | in review |
 
 ## Setup
 
-Prerequisites (already installed on the dev machine): Python 3.12, [uv](https://docs.astral.sh/uv/),
+Prerequisites (already installed on the dev machine): Python 3.12, [uv](https://docs.astral.sh/uv/), Docker (runs the GitHub and Terraform MCP servers),
 Terraform, AWS CLI v2, tflint, checkov, gh.
 
 ```bash
@@ -46,6 +47,7 @@ shell instead:
 | --- | --- | --- |
 | `ANTHROPIC_API_KEY` | Anthropic API key (Console, project workspace with a spend limit) | Yes |
 | `OPTIMIZER_AWS_ACCOUNT_ID` | 12-digit AWS account ID the optimizer is allowed to analyze | No, but kept out of the repo |
+| `OPTIMIZER_GITHUB_APP_ID`, `OPTIMIZER_GITHUB_APP_INSTALLATION_ID` | GitHub App that opens PRs ([docs/github-app.md](docs/github-app.md)); its private key is a file, `~/.config/aws-optimizer/github-app.pem` | IDs no, key yes |
 
 The recommended place is a file outside the repo, readable only by you, loaded
 from `~/.zshrc`:
@@ -131,6 +133,45 @@ scripts/sandbox_destroy.sh                            # tear the fixtures down (
 
 Details: [evals/README.md](evals/README.md) and [sandbox/README.md](sandbox/README.md).
 
+## Terraform changes and PRs (M5)
+
+Every `optimizer run` also writes, for each managed proposal, the Terraform change that
+would implement it. **Nothing is pushed.**
+
+```text
+out/<run_id>/changes/<proposal_id>/
+  change.diff          the edit, after terraform fmt
+  manifest.json        what the plan may touch (the CI scope guard enforces it)
+  pr_title.txt, pr_description.md
+  result.json          status (ok / gave_up / refused / failed), checks log
+```
+
+How a change is made (`src/optimizer/iac/`):
+
+1. **Where:** the resource's `iac_repo` / `iac_stack` tags pick the repo and stack, but only
+   stacks allowed in `config.yaml` `github.targets`. In this repo only `sandbox/` is ever
+   editable, whatever the config says (`paths.py`): `infra/`, `.github/` and `ci/` define
+   the optimizer's own identity and checks.
+2. **What:** Sonnet reads the stack's `.tf` files, looks up provider docs through the
+   Terraform MCP server when unsure, and submits exact search-and-replace edits plus the
+   one plan address it expects to change.
+3. **Checks (code, `checks.py`):** edits stay inside the stack, `.tf` only; exactly one plan
+   address, and it exists in the code; no IAM; a volume that needs a snapshot can only be
+   deleted once `final_snapshot = true` is already applied (otherwise the change is "step 1:
+   set it"); `terraform fmt` + `validate`. Failures go back to the model to fix.
+
+To open one as a real PR, after reading its `pr_description.md`:
+
+```bash
+uv run optimizer pr --run-id <run_id> --proposal <proposal_id>
+```
+
+No model is involved: it re-applies the edits on a fresh clone of `main`, re-runs every
+check, then makes three GitHub calls (branch, one commit with the `.tf` files and the
+manifest, PR) through the official GitHub MCP server, as the GitHub App
+([docs/github-app.md](docs/github-app.md)). The account ID is masked in everything sent to
+GitHub. Until the M7 human gate exists, choosing the proposal yourself is the gate.
+
 ## Layout
 
 ```text
@@ -149,6 +190,7 @@ src/optimizer/
   aws_session.py          refuses to run as anything but optimizer-agent-read
   graph.py, run.py        LangGraph workflow and the `run` command
   evals.py                `optimizer eval`: score a run against evals/cases.yaml
+  iac/                    synthesizer (Terraform edit + checks), publisher (`optimizer pr`), GitHub App auth
   agents/                 tool-use loop (base.py) and the Cost agent (cost.py)
   insights/               aws-insights MCP server (cost_server.py) + tool logic
 tests/                    pytest, fully offline (fake Anthropic client)

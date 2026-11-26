@@ -55,6 +55,32 @@ thresholds:
 features:
   access_analyzer_unused_access: false   # billed per role analyzed per month
 
+# Where the IaC synthesizer (M5) may open PRs. The key is the resource's iac_repo
+# tag; `stacks` lists the directories it may edit there. Anything else is refused.
+# The optimizer's own files (infra/, .github/, ci/, ...) are refused in code too,
+# whatever this says (src/optimizer/iac/paths.py).
+github:
+  owner: RonnieBoi1996
+  base_branch: main
+  targets:
+    aws-optimization-agent:
+      stacks: ["sandbox"]
+    infra-live:
+      stacks: ["stacks/*"]
+  # Official GitHub MCP server v2.1.0, pinned by digest. Started per PR with only
+  # the tools the publisher uses (no merge tool exists in that process).
+  mcp_image: ghcr.io/github/github-mcp-server@sha256:f6056fc10bfffcc8c81a6417a2e9ca12808647e8dd6049642a4feaadee0e0f8a
+
+# HashiCorp's Terraform MCP server v1.4.1: lets the synthesizer read the real
+# provider docs instead of guessing argument names. Public registry only.
+terraform_mcp:
+  enabled: true
+  image: hashicorp/terraform-mcp-server@sha256:11dd418bba6003dd5777e9d0979b68de59929a155b355f338f407947e00e9d80
+
+synthesizer:
+  max_proposals_per_run: 5   # Terraform changes written per run (one Sonnet loop each)
+  max_turns: 8               # per proposal, including retries after failed checks
+
 paths:
   runs_dir: runs        # runs/<run_id>.jsonl
   out_dir: out          # dry-run outputs

@@ -75,6 +75,29 @@ class Paths(_Strict):
     context_dir: str = "context"
 
 
+class IacTarget(_Strict):
+    # fnmatch patterns of stack directories (repo-relative) the synthesizer may edit.
+    stacks: list[str] = Field(min_length=1)
+
+
+class GithubConfig(_Strict):
+    owner: str
+    base_branch: str = "main"
+    # iac_repo tag value -> what may be changed there. A repo missing here is never touched.
+    targets: dict[str, IacTarget]
+    mcp_image: str = Field(pattern=r"@sha256:[0-9a-f]{64}$")  # pinned by digest
+
+
+class TerraformMcpConfig(_Strict):
+    enabled: bool = True
+    image: str = Field(pattern=r"@sha256:[0-9a-f]{64}$")
+
+
+class SynthesizerConfig(_Strict):
+    max_proposals_per_run: int = Field(default=5, ge=0)
+    max_turns: int = Field(default=8, gt=0)  # includes retries after failed checks
+
+
 class Config(_Strict):
     aws: AwsConfig
     models: ModelsConfig
@@ -83,6 +106,9 @@ class Config(_Strict):
     thresholds: Thresholds
     features: Features = Features()
     paths: Paths = Paths()
+    github: GithubConfig
+    terraform_mcp: TerraformMcpConfig
+    synthesizer: SynthesizerConfig = SynthesizerConfig()
 
     def resolve(self, relative: str) -> Path:
         """Turn a path from config (relative to the repo root) into an absolute path."""
