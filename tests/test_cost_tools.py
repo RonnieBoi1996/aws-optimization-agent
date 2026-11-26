@@ -174,3 +174,20 @@ def test_cache_expires(tmp_path):
 def test_every_result_has_window_and_timestamp():
     out = cost_tools._envelope(datetime(2026, 1, 1, tzinfo=timezone.utc), datetime(2026, 1, 15, tzinfo=timezone.utc))
     assert set(out) >= {"window", "data_timestamp"} and out["window"]["days"] == 14.0
+
+
+@mock_aws
+def test_idle_ec2_with_too_little_data_is_too_new_not_idle():
+    ec2 = boto3.client("ec2", region_name=REGION)
+    cw = boto3.client("cloudwatch", region_name=REGION)
+    ami = ec2.describe_images()["Images"][0]["ImageId"]
+    iid = ec2.run_instances(ImageId=ami, InstanceType="t3.micro", MinCount=1, MaxCount=1)["Instances"][0]["InstanceId"]
+    now = datetime.now(timezone.utc)
+    from datetime import timedelta
+    dims = [{"Name": "InstanceId", "Value": iid}]
+    # 2 hours of near-zero CPU and network: would look idle, but far too little data.
+    cw.put_metric_data(Namespace="AWS/EC2", MetricData=[
+        {"MetricName": m, "Dimensions": dims, "Timestamp": now - timedelta(hours=h), "Value": 0.1}
+        for m in ("CPUUtilization", "NetworkIn", "NetworkOut") for h in (1, 2)])
+    out = cost_tools.get_idle_ec2(make_clients(), days=14)
+    assert out["idle_instances"] == [] and out["too_new_to_judge"] == [iid]

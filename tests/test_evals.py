@@ -152,3 +152,17 @@ def test_repo_context_loads_with_fixture_services():
     assert "Do not downsize `sandbox-report-builder`" in ctx.context_text
     keep = ARN["volume/vol-keep"]
     assert protection_reason(keep, ctx.constraints_for(keep).do_not_touch, ctx.tag_map[keep])
+
+
+def test_skipped_reason_explains_a_miss():
+    vol = ARN["volume/vol-data"]
+    r = score(CASES, inventory(), RUN_ID, [], [], [], skipped=[{"resource_arn": vol, "reason": "too new"}])
+    assert next(x.detail for x in r.results if x.case == "unattached-ebs") == "agent skipped it: too new"
+
+
+def test_clean_skipped_drops_junk_and_scrubs():
+    from optimizer.agents.base import clean_skipped
+    out = clean_skipped([{"resource_arn": "arn:aws:ec2:r:1:volume/v", "reason": "key AKIAABCDEFGHIJKLMNOP"},
+                         {"resource_arn": 5, "reason": "x"}, "junk"])
+    assert len(out) == 1 and "AKIAABCDEFGHIJKLMNOP" not in out[0]["reason"]
+    assert clean_skipped(None) == []

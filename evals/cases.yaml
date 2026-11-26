@@ -16,7 +16,7 @@ cases:
   - id: unattached-ebs
     agent: cost
     expect: proposal
-    min_age_hours: 0           # visible the moment it exists
+    min_age_hours: 24          # a volume detached for minutes isn't waste yet; the agent may fairly wait
     why: 1 GB gp3 volume attached to nothing.
 
   - id: oversized-ec2
