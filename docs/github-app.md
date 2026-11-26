@@ -20,7 +20,7 @@ and to `contents` + `pull_requests` write.
    **New GitHub App**.
 2. Fill in:
    - **GitHub App name:** anything unique, e.g. `aws-optimizer-<your username>`
-   - **Homepage URL:** this repo's URL
+   - **Homepage URL:** `https://github.com/RonnieBoi1996/aws-optimization-agent` (required by GitHub, only shown on the App page; it grants nothing)
    - **Webhook:** untick **Active** (the App doesn't receive events)
    - **Repository permissions:**
      - **Contents:** Read and write
