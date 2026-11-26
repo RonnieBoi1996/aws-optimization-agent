@@ -270,3 +270,10 @@ def test_graph_end_to_end_writes_outputs(config, tmp_path, monkeypatch):
     assert "-$0.88/mo" in summary and "Snapshot first" in summary
     kinds = [json.loads(line)["kind"] for line in run_log.path.read_text().splitlines()]
     assert {"context_loaded", "agent_finished", "proposal", "llm_call"} <= set(kinds)
+
+
+def test_validate_drops_do_not_touch_by_tag(tmp_path):
+    ctx = make_ctx(tmp_path, {VOL: {"service": "sandbox", "iac_repo": "r", "iac_stack": "s",
+                                    "Name": "keep-me"}}, do_not_touch=["tag:Name=keep-me"])
+    props, unmanaged, rejected = validate([proposal()], agent="cost", run_id="r1", ctx=ctx, exists=lambda a: True, now=NOW)
+    assert not props and "tag:Name=keep-me" in rejected[0].reason

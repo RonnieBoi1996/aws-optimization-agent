@@ -19,6 +19,11 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--no-dry-run", dest="dry_run", action="store_false",
                      help="Open PRs (not available until M5)")
 
+    ev = sub.add_parser("eval", help="Score a shadow run against the seeded sandbox (evals/cases.yaml)")
+    ev.add_argument("--run-id", help="Run to score (default: the newest in out/)")
+    ev.add_argument("--run", dest="run_first", action="store_true",
+                    help="Do a fresh shadow run first, then score it (costs a few cents)")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "smoke":
@@ -30,6 +35,9 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             from optimizer.run import run_shadow
             return run_shadow()
+        if args.command == "eval":
+            from optimizer.evals import run_eval
+            return run_eval(args.run_id, args.run_first)  # exit 1 = a false positive or a miss
     except RuntimeError as e:  # setup problems (credentials, identity, budget): one clear line
         print(f"error: {e}", file=sys.stderr)
         return 1

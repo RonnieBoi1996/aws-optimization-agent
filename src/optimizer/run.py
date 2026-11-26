@@ -17,6 +17,12 @@ log = logging.getLogger(__name__)
 
 
 def run_shadow() -> int:
+    execute_shadow_run()
+    return 0
+
+
+def execute_shadow_run() -> str:
+    """Run the graph once in shadow mode; return the run ID (out/<run_id>/)."""
     setup_logging()
     setup_tracing()
     config = load_config()
@@ -44,4 +50,4 @@ def run_shadow() -> int:
     print(f"Summary:  {final['output_dir']}/summary.md")
     print(f"Run log:  {run_log.path}\n")
     print(llm.usage.summary_table())
-    return 0
+    return run_id
