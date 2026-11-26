@@ -51,7 +51,7 @@ Two numbers, added to `~/.config/aws-optimizer/anthropic.env`:
 | Variable | Where to find it |
 | --- | --- |
 | `OPTIMIZER_GITHUB_APP_ID` | the App's settings page, "App ID" |
-| `OPTIMIZER_GITHUB_APP_INSTALLATION_ID` | `gh api /user/installations --jq '.installations[] \| [.app_slug, .id]'` |
+| `OPTIMIZER_GITHUB_APP_INSTALLATION_ID` | Settings → Applications → Installed GitHub Apps → **Configure**: the number at the end of the URL (`github.com/settings/installations/<id>`). (`gh api /user/installations` does NOT work: it needs a token issued by a GitHub App, not your gh login.) |
 | `OPTIMIZER_GITHUB_APP_KEY_FILE` | optional; defaults to `~/.config/aws-optimizer/github-app.pem` |
 
 ## Revoke
