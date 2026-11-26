@@ -17,7 +17,12 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--dry-run", dest="dry_run", action="store_true", default=True,
                      help="Write outputs to out/ only (default, and the only mode until M5)")
     run.add_argument("--no-dry-run", dest="dry_run", action="store_false",
-                     help="Open PRs (not available until M5)")
+                     help="Open PRs for every proposal (needs the M7 human gate; use `optimizer pr` until then)")
+    run.add_argument("--no-synth", dest="synthesize", action="store_false",
+                     help="Skip writing Terraform changes (saves one Sonnet loop per proposal)")
+    pr = sub.add_parser("pr", help="Open a GitHub PR for ONE synthesized change you picked")
+    pr.add_argument("--run-id", required=True)
+    pr.add_argument("--proposal", required=True, help="Proposal ID, e.g. cost-<run_id>-001")
 
     ev = sub.add_parser("eval", help="Score a shadow run against the seeded sandbox (evals/cases.yaml)")
     ev.add_argument("--run-id", help="Run to score (default: the newest in out/)")
@@ -31,10 +36,15 @@ def main(argv: list[str] | None = None) -> int:
             return run_smoke()
         if args.command == "run":
             if not args.dry_run:
-                print("error: opening PRs arrives in M5; only --dry-run is available.", file=sys.stderr)
+                print("error: opening PRs for a whole run waits for the M7 human gate. Review "
+                      "out/<run_id>/summary.md, then: optimizer pr --run-id <run> --proposal <id>",
+                      file=sys.stderr)
                 return 2
             from optimizer.run import run_shadow
-            return run_shadow()
+            return run_shadow(args.synthesize)
+        if args.command == "pr":
+            from optimizer.run import open_pr
+            return open_pr(args.run_id, args.proposal)
         if args.command == "eval":
             from optimizer.evals import run_eval
             return run_eval(args.run_id, args.run_first)  # exit 1 = a false positive or a miss

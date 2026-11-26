@@ -34,8 +34,9 @@ def _proposal_md(p: dict, heading: str) -> list[str]:
 
 
 def render_summary(run_id: str, proposals: list[dict], unmanaged: list[dict], rejected: list[dict],
-                   agent_stop: str, usage_table: str, skipped: list[dict] | None = None) -> str:
-    skipped = skipped or []
+                   agent_stop: str, usage_table: str, skipped: list[dict] | None = None,
+                   changes: list[dict] | None = None) -> str:
+    skipped, changes = skipped or [], changes or []
     total = sum(p["estimated_impact"]["monthly_cost_delta_usd"] for p in proposals)
     lines = [
         f"# Optimizer run {run_id} (shadow mode)",
@@ -65,19 +66,27 @@ def render_summary(run_id: str, proposals: list[dict], unmanaged: list[dict], re
         lines += ["## Looked at, not proposed (agent's reasons)", "", "| Resource | Reason |", "| --- | --- |"]
         lines += [f"| `{s['resource_arn']}` | {s['reason']} |" for s in skipped]
         lines.append("")
+    if changes:
+        lines += ["## Terraform changes (dry run: nothing was pushed)", "",
+                  "| Proposal | Result | Stack | Plan scope / reason |", "| --- | --- | --- | --- |"]
+        for c in changes:
+            scope = ", ".join(f"`{x['address']}` {'/'.join(x['actions'])}" for x in c.get("plan_changes") or [])
+            lines.append(f"| {c['proposal_id']} | {c['status']} | {c.get('stack', '')} | {scope or c.get('reason', '')} |")
+        lines += ["", "Files: `changes/<proposal>/` (change.diff, manifest.json, pr_description.md). "
+                  "To open one as a PR: `optimizer pr --run-id <run> --proposal <proposal>`.", ""]
     lines += ["## Token usage", "", "```text", usage_table, "```", ""]
     return scrub("\n".join(lines))
 
 
 def write_outputs(out_dir: Path, run_id: str, proposals: list[dict], unmanaged: list[dict],
                   rejected: list[dict], agent_stop: str, usage_table: str,
-                  skipped: list[dict] | None = None) -> Path:
+                  skipped: list[dict] | None = None, changes: list[dict] | None = None) -> Path:
     folder = out_dir / run_id
     folder.mkdir(parents=True, exist_ok=True)
     for name, data in (("proposals", proposals), ("unmanaged", unmanaged), ("rejected", rejected),
                        ("skipped", skipped or [])):
         (folder / f"{name}.json").write_text(scrub(json.dumps(data, indent=2, default=str)), encoding="utf-8")
     (folder / "summary.md").write_text(
-        render_summary(run_id, proposals, unmanaged, rejected, agent_stop, usage_table, skipped),
+        render_summary(run_id, proposals, unmanaged, rejected, agent_stop, usage_table, skipped, changes),
         encoding="utf-8")
     return folder
