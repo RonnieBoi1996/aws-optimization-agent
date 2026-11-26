@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "proposal_id": "cost-20261126T095825Z-043593-001",
+  "changes": [
+    {
+      "stack": "sandbox",
+      "address": "aws_ebs_volume.fixture[\"data\"]",
+      "actions": [
+        "update"
+      ]
+    }
+  ]
+}

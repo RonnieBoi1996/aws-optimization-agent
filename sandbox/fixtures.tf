@@ -95,6 +95,9 @@ resource "aws_ebs_volume" "fixture" {
   type              = "gp3"
   encrypted         = true
 
+  # Snapshot before deletion, only for the "data" volume (planned for removal).
+  final_snapshot = each.key == "data"
+
   tags = {
     Name      = each.value.name
     eval_case = each.value.case
