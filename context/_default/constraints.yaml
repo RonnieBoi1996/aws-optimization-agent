@@ -1,0 +1,11 @@
+# Applies to any resource whose `service` tag has no context/<service>/ folder,
+# and to untagged resources. Deliberately conservative.
+owner: unknown
+criticality: high
+sla_p99_ms: null          # unknown SLA -> latency-affecting changes escalate (R6)
+multi_az_required: false
+dr_role: false
+do_not_touch: []
+notes: >
+  Default constraints for resources without a known service. Treat as
+  important until someone writes a constraints.yaml for the service.

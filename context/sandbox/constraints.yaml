@@ -1,0 +1,10 @@
+# The optimizer's own test fixtures (sandbox/ stack). Safe to change.
+owner: RonnieBoi1996
+criticality: low
+sla_p99_ms: null
+multi_az_required: false
+dr_role: false
+do_not_touch: []
+notes: >
+  Test fixtures for the optimizer agents (M4 seeds known problems here).
+  Nothing here serves real traffic.

@@ -9,6 +9,11 @@ provider "aws" {
       project     = "aws-optimizer-sandbox"
       environment = "sandbox"
       managed_by  = "terraform"
+      # How the agents know a resource is managed by Terraform, and where
+      # (context/README.md). Without these it's reported as unmanaged.
+      iac_repo  = "aws-optimization-agent"
+      iac_stack = "sandbox"
+      service   = "sandbox"
     }
   }
 }

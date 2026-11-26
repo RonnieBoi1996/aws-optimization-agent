@@ -27,3 +27,6 @@ backend.hcl
 *_override.tf
 *.tfvars
 !*.tfvars.example
+
+# Local API response cache (Cost Explorer, Pricing)
+.cache/

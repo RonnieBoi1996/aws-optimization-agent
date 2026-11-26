@@ -23,7 +23,7 @@ a human.
 | M0 Scaffold (config, logging, LLM wrapper with caching + usage tracking) | done |
 | M1 Bootstrap infra (`infra/`): state bucket, OIDC, 4 roles, boundaries, CloudTrail, alerts | done (applied 2026-11-25) |
 | M2 Terraform PR + apply pipeline (`.github/`, `ci/`, `pipelines/`, `sandbox/`) | done (first CI apply 2026-11-25, PR #2) |
-| M3 `aws-insights` cost tools + Cost agent, shadow mode | next |
+| M3 `aws-insights` cost tools + Cost agent, shadow mode | in review |
 
 ## Setup
 
@@ -71,6 +71,52 @@ call 2: answer='250'  cache_wr=0      cache_rd=12342  uncached_in=68
 Call 1 writes the prompt cache and call 2 reads it. If call 2 shows `cache_rd=0`,
 the cached prefix changed between the two calls (see "Prompt caching" below).
 
+## Running the Cost agent (shadow mode)
+
+```bash
+aws sso login --profile AdministratorAccess-$OPTIMIZER_AWS_ACCOUNT_ID   # the agent role is assumed from it
+AWS_PROFILE=agent-dev uv run optimizer run
+```
+
+It refuses to start unless AWS says it is `optimizer-agent-read` in your account, so it
+can't accidentally run with admin rights. Nothing is changed in AWS and no PRs are opened.
+Results go to `out/<run_id>/`:
+
+| File | Contents |
+| --- | --- |
+| `summary.md` | human-readable proposals, unmanaged findings, rejections, token usage |
+| `proposals.json` | validated proposals for Terraform-managed resources |
+| `unmanaged.json` | findings on resources without IaC tags (never turned into PRs) |
+| `rejected.json` | what the model proposed that failed validation, and why |
+
+Every event also goes to `runs/<run_id>.jsonl`.
+
+How a run flows:
+
+```text
+load_context   tags (tag:GetResources) -> service -> context/<service>/constraints.yaml + docs
+cost_agent     Sonnet + aws-insights cost tools (MCP subprocess), ends with submit_proposals
+validate       schema -> evidence dates -> protected/do_not_touch -> exists in AWS -> IaC tags
+write_output   out/<run_id>/
+```
+
+The model never decides `service`, `iac_path` or plan addresses: those come from the
+resource's real tags (and, in M5, from the Terraform code). See [context/README.md](context/README.md)
+for the tags every stack must set.
+
+### Cost tools (`aws-insights`)
+
+| Tool | What it returns |
+| --- | --- |
+| `get_cost_by_service(days)` | Cost Explorer spend per service (cached 6 h: every request is billed $0.01) |
+| `get_idle_ec2(days)` | running instances with avg CPU < 5 %, peak hourly CPU < 20 %, network < 5 MB/day |
+| `get_unattached_ebs()` | volumes in state `available`, with size, age and monthly cost |
+| `get_rightsizing_recommendations()` | Compute Optimizer over/under-provisioned instances |
+| `get_storage_class_candidates(bucket)` | buckets with ≥ 1 GB STANDARD and no transition rule. `bucket` is optional (all buckets), because untagged buckets don't show up in tag lookups |
+
+Every result includes its time `window` and a `data_timestamp`. Prices come from the AWS
+Pricing API (cached a week); when a price can't be found it's reported as unknown, never guessed.
+
 ## Layout
 
 ```text
@@ -81,9 +127,18 @@ src/optimizer/
                           usage tracking, per-run token budget
   scrub.py                secret redaction + <untrusted_data> quoting
   logging_setup.py        console logging + runs/<run_id>.jsonl event log
-  smoke.py, cli.py        `uv run optimizer smoke`
+  smoke.py, cli.py        `uv run optimizer smoke`, `uv run optimizer run`
+  schemas.py              proposal + constraints.yaml schemas (pydantic)
+  context.py              load_context: tags -> service -> constraints + docs
+  validate.py             schema, evidence, protection, existence, IaC tags
+  protection.py           the optimizer's own identity + do_not_touch (rule 4, in code)
+  aws_session.py          refuses to run as anything but optimizer-agent-read
+  graph.py, run.py        LangGraph workflow and the `run` command
+  agents/                 tool-use loop (base.py) and the Cost agent (cost.py)
+  insights/               aws-insights MCP server (cost_server.py) + tool logic
 tests/                    pytest, fully offline (fake Anthropic client)
 runs/, out/               run logs and dry-run outputs (git-ignored)
+context/                  per-service constraints.yaml + docs (see context/README.md)
 infra/                    bootstrap Terraform stack, applied by hand with admin (see infra/README.md)
 sandbox/                  test fixtures for the agents; applied by CI (tagged environment=sandbox)
 .github/workflows/        terraform-pr.yml (checks + plan + comment), terraform-apply.yml
