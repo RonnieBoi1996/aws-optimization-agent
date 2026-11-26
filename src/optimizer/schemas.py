@@ -117,6 +117,6 @@ class ServiceConstraints(_Strict):
     min_capacity: int | None = Field(default=None, ge=0)
     multi_az_required: bool = False
     dr_role: bool = False
-    do_not_touch: list[str] = Field(default_factory=list, description="ARNs or fnmatch patterns.")
+    do_not_touch: list[str] = Field(default_factory=list, description="ARNs, fnmatch patterns over ARNs, or tag:Key=Value.")
     notes: str = ""
     thresholds: ThresholdOverrides | None = None

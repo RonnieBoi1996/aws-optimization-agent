@@ -1,0 +1,10 @@
+# Report builder (sandbox/ stack): builds the month-end reports.
+owner: RonnieBoi1996
+criticality: medium
+sla_p99_ms: null
+multi_az_required: false
+dr_role: false
+do_not_touch: []
+notes: >
+  Batch job host. Average load is low most of the month; see the post-mortem in
+  docs/ before changing its size.

@@ -99,7 +99,7 @@ def validate(raw_items: list[dict] | None, *, agent: AgentName, run_id: str, ctx
             reject(f"evidence: {problem}", raw, arn)
             continue
 
-        if reason := protection_reason(arn, ctx.constraints_for(arn).do_not_touch):
+        if reason := protection_reason(arn, ctx.constraints_for(arn).do_not_touch, ctx.tag_map.get(arn)):
             reject(f"protected (R1): {reason}", raw, arn)
             continue
 

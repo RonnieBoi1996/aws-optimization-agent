@@ -1,0 +1,36 @@
+# Ground truth for the sandbox eval (M4). One entry per seeded resource in
+# sandbox/fixtures.tf, matched by the resource's `eval_case` tag.
+#
+#   expect: proposal      the agent should propose a change to it (recall)
+#   expect: no_proposal   proposing anything for it is a false positive
+#   min_age_hours         the data the agent needs doesn't exist before this age;
+#                         a miss on a younger resource counts as "not ready", not a miss
+version: 1
+cases:
+  - id: idle-ec2
+    agent: cost
+    expect: proposal
+    min_age_hours: 24          # needs a day of hourly CloudWatch CPU/network data
+    why: t3.nano with no workload and no network.
+
+  - id: unattached-ebs
+    agent: cost
+    expect: proposal
+    min_age_hours: 0           # visible the moment it exists
+    why: 1 GB gp3 volume attached to nothing.
+
+  - id: oversized-ec2
+    agent: cost
+    expect: proposal
+    min_age_hours: 48          # Compute Optimizer needs ~30h of metrics, then refreshes daily
+    why: t3.small at ~7% CPU; Compute Optimizer should call it over-provisioned.
+
+  - id: do-not-touch-ebs
+    agent: cost
+    expect: no_proposal
+    why: Unattached, but listed in context/sandbox/constraints.yaml do_not_touch.
+
+  - id: postmortem-ec2
+    agent: cost
+    expect: no_proposal
+    why: Same shape as oversized-ec2, but a post-mortem says never to downsize it.

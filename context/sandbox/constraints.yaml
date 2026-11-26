@@ -4,7 +4,10 @@ criticality: low
 sla_p99_ms: null
 multi_az_required: false
 dr_role: false
-do_not_touch: []
+do_not_touch:
+  # Kept on purpose (holds an archive we may need). Matched by Name tag because
+  # the volume ID isn't known until it's created.
+  - "tag:Name=sandbox-archive-vol"
 notes: >
   Test fixtures for the optimizer agents (M4 seeds known problems here).
   Nothing here serves real traffic.

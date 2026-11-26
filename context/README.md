@@ -20,7 +20,7 @@ unknown keys are rejected):
 | `min_capacity` | never go below this many instances/tasks |
 | `multi_az_required` | changes must keep multi-AZ |
 | `dr_role` | resource is part of disaster recovery: don't trim |
-| `do_not_touch` | ARNs or patterns agents must never propose changes to |
+| `do_not_touch` | never propose changes to these: an ARN, a pattern like `arn:aws:s3:::logs-*`, or `tag:Name=my-volume` (exact tag match; use it when the ARN holds a random ID) |
 | `notes` | free text |
 | `thresholds` | optional overrides of `config.yaml` thresholds |
 
