@@ -34,7 +34,8 @@ def _proposal_md(p: dict, heading: str) -> list[str]:
 
 
 def render_summary(run_id: str, proposals: list[dict], unmanaged: list[dict], rejected: list[dict],
-                   agent_stop: str, usage_table: str) -> str:
+                   agent_stop: str, usage_table: str, skipped: list[dict] | None = None) -> str:
+    skipped = skipped or []
     total = sum(p["estimated_impact"]["monthly_cost_delta_usd"] for p in proposals)
     lines = [
         f"# Optimizer run {run_id} (shadow mode)",
@@ -42,6 +43,7 @@ def render_summary(run_id: str, proposals: list[dict], unmanaged: list[dict], re
         f"- **Proposals (managed):** {len(proposals)}, estimated {_money(total)}",
         f"- **Unmanaged findings:** {len(unmanaged)} (no IaC tags, never turned into PRs)",
         f"- **Rejected by validation:** {len(rejected)}",
+        f"- **Looked at, not proposed:** {len(skipped)}",
         f"- **Agent finished:** {agent_stop}",
         "",
         "Nothing was changed. These are proposals only.",
@@ -59,16 +61,23 @@ def render_summary(run_id: str, proposals: list[dict], unmanaged: list[dict], re
         lines += ["## Rejected", "", "| Resource | Reason |", "| --- | --- |"]
         lines += [f"| `{r.get('resource_arn') or '?'}` | {r['reason']} |" for r in rejected]
         lines.append("")
+    if skipped:
+        lines += ["## Looked at, not proposed (agent's reasons)", "", "| Resource | Reason |", "| --- | --- |"]
+        lines += [f"| `{s['resource_arn']}` | {s['reason']} |" for s in skipped]
+        lines.append("")
     lines += ["## Token usage", "", "```text", usage_table, "```", ""]
     return scrub("\n".join(lines))
 
 
 def write_outputs(out_dir: Path, run_id: str, proposals: list[dict], unmanaged: list[dict],
-                  rejected: list[dict], agent_stop: str, usage_table: str) -> Path:
+                  rejected: list[dict], agent_stop: str, usage_table: str,
+                  skipped: list[dict] | None = None) -> Path:
     folder = out_dir / run_id
     folder.mkdir(parents=True, exist_ok=True)
-    for name, data in (("proposals", proposals), ("unmanaged", unmanaged), ("rejected", rejected)):
+    for name, data in (("proposals", proposals), ("unmanaged", unmanaged), ("rejected", rejected),
+                       ("skipped", skipped or [])):
         (folder / f"{name}.json").write_text(scrub(json.dumps(data, indent=2, default=str)), encoding="utf-8")
     (folder / "summary.md").write_text(
-        render_summary(run_id, proposals, unmanaged, rejected, agent_stop, usage_table), encoding="utf-8")
+        render_summary(run_id, proposals, unmanaged, rejected, agent_stop, usage_table, skipped),
+        encoding="utf-8")
     return folder

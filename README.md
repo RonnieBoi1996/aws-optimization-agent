@@ -110,7 +110,7 @@ for the tags every stack must set.
 | Tool | What it returns |
 | --- | --- |
 | `get_cost_by_service(days)` | Cost Explorer spend per service (cached 6 h: every request is billed $0.01) |
-| `get_idle_ec2(days)` | running instances with avg CPU < 5 %, peak hourly CPU < 20 %, network < 5 MB/day |
+| `get_idle_ec2(days)` | running instances with avg CPU < 5 %, peak hourly CPU < 20 %, network < 5 MB/day, with ≥ 24 h of data (newer instances are listed as `too_new_to_judge`) |
 | `get_unattached_ebs()` | volumes in state `available`, with size, age and monthly cost |
 | `get_rightsizing_recommendations()` | Compute Optimizer over/under-provisioned instances |
 | `get_storage_class_candidates(bucket)` | buckets with ≥ 1 GB STANDARD and no transition rule. `bucket` is optional (all buckets), because untagged buckets don't show up in tag lookups |

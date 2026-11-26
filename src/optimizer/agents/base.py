@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from optimizer.llm import LLM, ModelRole, PromptPrefix
-from optimizer.scrub import untrusted_block
+from optimizer.scrub import scrub, untrusted_block
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +31,7 @@ class AgentResult:
     turns: int
     stop: str                      # "submitted" | "max_turns" | "no_tool_call" | "refusal"
     tool_calls: list[str] = field(default_factory=list)
+    skipped: list[dict] = field(default_factory=list)  # [{resource_arn, reason}] the agent chose not to propose
 
 
 def mcp_tools_to_anthropic(mcp_tools: list[Any]) -> list[dict]:
@@ -69,10 +70,30 @@ def submit_tool(item_schema: dict, description: str) -> dict:
         "description": description,
         "input_schema": {
             "type": "object",
-            "properties": {"proposals": {"type": "array", "items": inline_refs(item_schema)}},
+            "properties": {
+                "proposals": {"type": "array", "items": inline_refs(item_schema)},
+                # Not acted on by code: it's for humans and the eval, so a miss can be
+                # told apart from "looked at it and decided against it".
+                "skipped": {
+                    "type": "array",
+                    "description": "Resources a tool flagged that you decided NOT to propose, with why.",
+                    "items": {"type": "object", "additionalProperties": False,
+                              "properties": {"resource_arn": {"type": "string"}, "reason": {"type": "string"}},
+                              "required": ["resource_arn", "reason"]},
+                },
+            },
             "required": ["proposals"],
         },
     }
+
+
+def clean_skipped(raw: Any, limit: int = 50) -> list[dict]:
+    """Keep only well-formed {resource_arn, reason} items, bounded and scrubbed (model output)."""
+    out = []
+    for item in raw if isinstance(raw, list) else []:
+        if isinstance(item, dict) and isinstance(item.get("resource_arn"), str) and isinstance(item.get("reason"), str):
+            out.append({"resource_arn": item["resource_arn"][:300], "reason": scrub(item["reason"][:500])})
+    return out[:limit]
 
 
 def _tool_result_text(result: Any) -> tuple[str, bool]:
@@ -93,6 +114,14 @@ async def run_tool_loop(*, llm: LLM, agent: str, role: ModelRole, prefix: Prompt
         response = llm.call(agent=agent, role=role, prefix=prefix, task=task, history=history)
         # Append the assistant turn UNCHANGED (it may hold thinking blocks the API expects back).
         history.append({"role": "assistant", "content": response.content})
+        # Keep what the model said and submitted in the run log (RunLog scrubs it):
+        # without this, a missed finding can't be explained after the fact.
+        if getattr(llm, "run_log", None):
+            text = "\n".join(getattr(b, "text", "") for b in response.content if getattr(b, "type", "") == "text")
+            submit = [b.input for b in response.content
+                      if getattr(b, "type", "") == "tool_use" and b.name == SUBMIT_TOOL_NAME]
+            llm.run_log.event("assistant_turn", agent=agent, turn=turn, text=text[:4000],
+                              submit_input=submit[0] if submit else None)
 
         if response.stop_reason == "refusal":
             return AgentResult(None, turn, "refusal", calls)
@@ -106,11 +135,12 @@ async def run_tool_loop(*, llm: LLM, agent: str, role: ModelRole, prefix: Prompt
                 f"Finish by calling {SUBMIT_TOOL_NAME} (with an empty list if there is nothing to propose)."}]})
             continue
 
-        results, submitted = [], None
+        results, submitted, skipped = [], None, []
         for tu in tool_uses:
             calls.append(tu.name)
             if tu.name == SUBMIT_TOOL_NAME:
                 submitted = list((tu.input or {}).get("proposals", []))
+                skipped = clean_skipped((tu.input or {}).get("skipped"))
                 results.append({"type": "tool_result", "tool_use_id": tu.id, "content": "Received."})
                 continue
             try:
@@ -125,6 +155,6 @@ async def run_tool_loop(*, llm: LLM, agent: str, role: ModelRole, prefix: Prompt
         # All results of this turn go back in ONE message (keeps parallel tool use working).
         history.append({"role": "user", "content": results})
         if submitted is not None:
-            return AgentResult(submitted, turn, "submitted", calls)
+            return AgentResult(submitted, turn, "submitted", calls, skipped)
 
     return AgentResult(None, max_turns, "max_turns", calls)

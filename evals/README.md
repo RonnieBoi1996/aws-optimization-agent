@@ -36,8 +36,13 @@ change. The proposal text is in `out/<run_id>/summary.md` for a human to judge.
 
 ## Timing
 
-- `unattached-ebs` and the two "leave it alone" cases can be scored right after apply.
-- `idle-ec2` needs ~24 h of CloudWatch data.
+- The two "leave it alone" cases can be scored right after apply.
+- `idle-ec2` and `unattached-ebs` need 24 h (the idle tool needs 24 hourly datapoints;
+  a volume detached for minutes isn't waste yet).
+
+The model isn't deterministic: a borderline case can go either way between two runs
+of the same data. Each miss shows the agent's own reason (from its `skipped` list),
+so you can tell a bad judgement from a missing fact.
 - `oversized-ec2` needs Compute Optimizer: ~30 h of metrics, then a daily refresh, so ~48 h.
 
 Compute Optimizer is a black box. If it decides the worker is "Optimized" (it

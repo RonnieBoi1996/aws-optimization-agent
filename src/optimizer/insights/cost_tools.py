@@ -29,6 +29,9 @@ IAC_TAG_KEYS = ("iac_repo", "iac_stack", "service", "Name", "environment")
 IDLE_MAX_AVG_CPU_PCT = 5.0
 IDLE_MAX_PEAK_CPU_PCT = 20.0
 IDLE_MAX_NETWORK_MB_PER_DAY = 5.0
+# Fewer hourly datapoints than this = too new to judge. Decided in code, not left
+# to the model: an instance launched 15 minutes ago is not "idle".
+IDLE_MIN_HOURS_OF_DATA = 24
 
 COST_EXPLORER_TTL = 6 * 3600  # Cost Explorer charges per request; data updates ~daily anyway
 
@@ -105,7 +108,7 @@ def get_idle_ec2(c: Clients, days: int = 14) -> dict:
         for res in page["Reservations"]:
             instances.extend(res["Instances"])
 
-    idle, checked = [], 0
+    idle, too_new, checked = [], [], 0
     for inst in instances[:100]:  # bound CloudWatch calls on big accounts
         checked += 1
         dims = [{"Name": "InstanceId", "Value": inst["InstanceId"]}]
@@ -116,6 +119,9 @@ def get_idle_ec2(c: Clients, days: int = 14) -> dict:
         peak_cpu = max(hourly_avg) if hourly_avg else None
         net_days = max(len(net_in), len(net_out))
         net_mb_day = ((sum(net_in) + sum(net_out)) / 1e6 / net_days) if net_days else None
+        if len(hourly_avg) < IDLE_MIN_HOURS_OF_DATA:
+            too_new.append(inst["InstanceId"])
+            continue
         if not classify_idle(avg_cpu, peak_cpu, net_mb_day):
             continue
         hourly = pricing.ec2_hourly_usd(c.pricing, c.region, inst["InstanceType"])
@@ -134,8 +140,10 @@ def get_idle_ec2(c: Clients, days: int = 14) -> dict:
     items, truncated = _cap(idle, key=lambda i: -(i["est_monthly_cost_usd"] or 0))
     return _envelope(start, end, criteria={
         "avg_cpu_below_pct": IDLE_MAX_AVG_CPU_PCT, "peak_hourly_cpu_below_pct": IDLE_MAX_PEAK_CPU_PCT,
-        "network_below_mb_per_day": IDLE_MAX_NETWORK_MB_PER_DAY},
-        running_instances_checked=checked, idle_instances=items, truncated=truncated)
+        "network_below_mb_per_day": IDLE_MAX_NETWORK_MB_PER_DAY,
+        "min_hours_of_data": IDLE_MIN_HOURS_OF_DATA},
+        running_instances_checked=checked, idle_instances=items, truncated=truncated,
+        too_new_to_judge=too_new[:MAX_ITEMS])
 
 
 def _instance_arn(inst: dict, region: str) -> str:

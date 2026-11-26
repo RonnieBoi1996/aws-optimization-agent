@@ -38,7 +38,9 @@ metrics, prices or timestamps: every evidence item must copy its values, its win
 (window.start / window.end) and its data_timestamp from a tool result, and name that tool \
 in source_tool.
 3. Finish by calling submit_proposals exactly once, with every proposal in one list. An \
-empty list is a valid answer when nothing is worth changing.
+empty list is a valid answer when nothing is worth changing. For every resource a tool \
+flagged that you decided not to propose, add an entry to `skipped` with a one-sentence \
+reason, so a human can check your judgement.
 
 Rules for each proposal:
 - resource_arn: the exact ARN from a tool result.

@@ -176,10 +176,11 @@ def run_time_from_id(run_id: str) -> datetime:
 
 
 def score(cases: list[Case], inv: SandboxInventory, run_id: str, proposals: list[dict],
-          unmanaged: list[dict], rejected: list[dict]) -> EvalResult:
+          unmanaged: list[dict], rejected: list[dict], skipped: list[dict] | None = None) -> EvalResult:
     run_time = run_time_from_id(run_id)
     proposed = {p["resource_arn"] for p in proposals + unmanaged}
     rejected_why = {r["resource_arn"]: r["reason"] for r in rejected if r.get("resource_arn")}
+    skipped_why = {s["resource_arn"]: s["reason"] for s in skipped or []}
 
     results = []
     for c in cases:
@@ -196,7 +197,9 @@ def score(cases: list[Case], inv: SandboxInventory, run_id: str, proposals: list
                 results.append(CaseResult(c.id, c.expect, "not_ready", arn,
                                           f"{age_h:.0f}h old at run time, needs {c.min_age_hours:.0f}h"))
             else:
-                detail = f"rejected: {rejected_why[arn]}" if arn in rejected_why else "not proposed"
+                detail = (f"rejected: {rejected_why[arn]}" if arn in rejected_why
+                          else f"agent skipped it: {skipped_why[arn]}" if arn in skipped_why
+                          else "not proposed, no reason given")
                 results.append(CaseResult(c.id, c.expect, "miss", arn, detail))
         else:
             if arn in proposed:
@@ -204,7 +207,8 @@ def score(cases: list[Case], inv: SandboxInventory, run_id: str, proposals: list
             elif arn in rejected_why:
                 results.append(CaseResult(c.id, c.expect, "caught_by_validator", arn, rejected_why[arn]))
             else:
-                results.append(CaseResult(c.id, c.expect, "correctly_skipped", arn))
+                results.append(CaseResult(c.id, c.expect, "correctly_skipped", arn,
+                                          f"agent: {skipped_why[arn]}" if arn in skipped_why else ""))
 
     case_arns = {s.arn for s in inv.by_case.values()}
     unexpected = [CaseResult("(unseeded sandbox resource)", "no_proposal", "false_positive", a,
@@ -255,11 +259,14 @@ def run_eval(run_id: str | None, run_first: bool) -> int:
     folder = out_dir / run_id
     if not (folder / "proposals.json").exists():
         raise RuntimeError(f"{folder} has no proposals.json")
-    load = lambda name: json.loads((folder / f"{name}.json").read_text(encoding="utf-8"))
+    def load(name: str) -> list[dict]:
+        path = folder / f"{name}.json"  # skipped.json doesn't exist in runs from before it was added
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
 
     session = agent_session(config.aws.region, config.aws.account_id)
     inv = find_seeded(session.client("resourcegroupstaggingapi"), session.client("ec2"))
-    result = score(load_cases(), inv, run_id, load("proposals"), load("unmanaged"), load("rejected"))
+    result = score(load_cases(), inv, run_id, load("proposals"), load("unmanaged"), load("rejected"),
+                   load("skipped"))
 
     (folder / "eval.json").write_text(json.dumps(result.as_dict(), indent=2, default=str), encoding="utf-8")
     text = render(result)

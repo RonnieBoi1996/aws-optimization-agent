@@ -37,6 +37,7 @@ class RunState(TypedDict, total=False):
     constraints: dict[str, dict]       # service -> ServiceConstraints dump
     context_text: str
     raw_proposals: list[dict] | None
+    skipped: list[dict]
     agent_stop: str
     proposals: list[dict]
     unmanaged: list[dict]
@@ -79,8 +80,9 @@ def build_graph(rt: Runtime):
                                       context_text=state["context_text"], mcp_server=rt.mcp_server)
         rt.run_log.event("agent_finished", agent=COST, stop=result.stop, turns=result.turns,
                          tool_calls=result.tool_calls,
-                         submitted=len(result.submitted) if result.submitted is not None else None)
-        return {"raw_proposals": result.submitted, "agent_stop": result.stop}
+                         submitted=len(result.submitted) if result.submitted is not None else None,
+                         skipped=result.skipped)
+        return {"raw_proposals": result.submitted, "agent_stop": result.stop, "skipped": result.skipped}
 
     @traced_node("validate")
     def node_validate(state: RunState) -> RunState:
@@ -101,7 +103,7 @@ def build_graph(rt: Runtime):
     def node_write_output(state: RunState) -> RunState:
         folder = write_outputs(cfg.resolve(cfg.paths.out_dir), state["run_id"], state["proposals"],
                                state["unmanaged"], state["rejected"], state.get("agent_stop", "?"),
-                               rt.llm.usage.summary_table())
+                               rt.llm.usage.summary_table(), skipped=state.get("skipped", []))
         return {"output_dir": str(folder)}
 
     g = StateGraph(RunState)
